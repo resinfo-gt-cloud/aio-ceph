@@ -1,0 +1,117 @@
+version: '3'
+
+tasks:
+
+  ud:
+    desc: down & up
+    cmds:
+      - task: down
+      - task: up
+
+  up:
+    desc: "VM ceph {{.TASK}}"
+    dir: "{{.TASKFILE_DIR}}"
+    vars:
+      INSTANCE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${LIMA_INSTANCE}"
+      DISTRIBUTION_NAME:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${DISTRIBUTION_NAME}"
+      USER_NAME:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${USER_NAME}"
+      DATA_DISKS_TO_CREATE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          DATA_DISKS=''
+          for DATA_DISK_INDEX in $(seq -s'  ' 1 ${DATA_DISKS_COUNT}); do
+            DATA_DISKS="${DATA_DISKS} {{.INSTANCE}}-data-${DATA_DISK_INDEX}"
+          done
+          echo "${DATA_DISKS}"
+      DATA_DISKS_SIZE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${DATA_DISKS_SIZE}"
+    cmds:
+    - pkgx gomplate --datasource environment=environment.sh?type=application/x-env
+                    --datasource provisioner=provisioner.sh?type=text/plain
+                    --file {{.ROOT_DIR}}/template.d/{{.DISTRIBUTION_NAME}}.yaml.gtpl
+                    --out {{.ROOT_DIR}}/run/{{.INSTANCE}}.yaml
+                    --chmod 644
+    
+    - for DATA_DISK in {{.DATA_DISKS_TO_CREATE}}; do
+          pkgx limactl disk create ${DATA_DISK}
+              --size {{.DATA_DISKS_SIZE}};
+        done
+    - limactl create
+              --name {{.INSTANCE}}
+              --tty=false
+              {{.ROOT_DIR}}/run/{{.INSTANCE}}.yaml
+
+    - limactl start {{.INSTANCE}}
+    - pkgx limactl shell {{.INSTANCE}}
+                   sudo -u {{.USER_NAME}}
+                        -i bash /tmp/provisioner.bash
+
+  fsid:
+    desc: get ceph fsid
+    silent: true
+    vars:
+      INSTANCE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${LIMA_INSTANCE}"
+      COMMAND: 'sudo ceph mon dump --format json 2>/dev/null'
+      FILTER: '.fsid'
+    cmds:
+    - pkgx limactl shell '{{.INSTANCE}}' {{.COMMAND}}
+                 | pkgx jq --raw-output '{{.FILTER}}'
+
+  mons:
+    desc: get ceph mons
+    silent: true
+    vars:
+      INSTANCE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${LIMA_INSTANCE}"
+      COMMAND: 'sudo ceph mon dump --format json 2>/dev/null'
+      FILTER: '.mons|map(.public_addrs.addrvec|.[]|select(.type=="v1")|.addr)'
+    cmds:
+    - pkgx limactl shell '{{.INSTANCE}}' {{.COMMAND}}
+                 | pkgx jq --raw-output '{{.FILTER}}'
+
+  down:
+    desc: VM ceph {{.TASK}}
+    vars:
+      INSTANCE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${LIMA_INSTANCE}"
+      DATA_DISKS_TO_DELETE:
+        sh: |
+          cd ${HOME}/.lima/_disks
+          pkgx +gnu.org/coreutils ls -dxw0 {{.INSTANCE}}*
+    cmds:
+    - pkgx limactl delete {{.INSTANCE}} --force
+    - pkgx limactl disk delete {{.DATA_DISKS_TO_DELETE}} --force
+
+  ui:
+    desc: open ceph ui
+    silent: true
+    vars:
+      SCHEME: 'https'
+      PORT: '8443'
+      INSTANCE:
+        sh: |
+          source {{.TASKFILE_DIR}}/environment.sh
+          echo "${LIMA_INSTANCE}"
+      IP:
+        sh: |
+          limactl shell {{.INSTANCE}} ip route get 8.8.8.8 | head -1 | cut -d' ' -f7
+    cmds:
+    - open -a safari "{{ .SCHEME }}://{{ .IP }}:{{ .PORT }}"
